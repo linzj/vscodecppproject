@@ -1,5 +1,5 @@
 {
   "dependencies": [
-    "libxml2"
+    "boost-asio"
   ]
 }

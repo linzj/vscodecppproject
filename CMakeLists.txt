@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.10)
-project(Win32Window)
+project(forwardemulatorport)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(LibXml2 CONFIG REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system)
 add_executable(${PROJECT_NAME} src/main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE LibXml2::LibXml2)
+target_link_libraries(${PROJECT_NAME} PRIVATE Boost::system)
 
 if (WIN32)
   add_compile_definitions(${PROJECT_NAME} "UNICODE")
