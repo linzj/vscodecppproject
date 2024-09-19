@@ -1,42 +1,38 @@
 #include <boost/asio.hpp>
-#include <future>
+#include <exception>
 #include <iostream>
-#include <thread>
 
 using boost::asio::ip::tcp;
 
 // 复制数据
-void copy_data(tcp::socket& src_socket, tcp::socket& dest_socket) {
-  try {
-    char buffer[1024];
-    boost::system::error_code ec;
+boost::asio::awaitable<void> copy_data(tcp::socket& src_socket,
+                                       tcp::socket& dest_socket,
+                                       const char* tag) {
+  char buffer[1024];
 
-    while (true) {
-      // 从源套接字读取数据
-      size_t bytes_read = src_socket.read_some(boost::asio::buffer(buffer), ec);
-      if (ec == boost::asio::error::eof) {
-        break;  // 连接关闭
-      } else if (ec) {
-        throw boost::system::system_error(ec);
-      }
-
-      // 将数据写入目标套接字
-      boost::asio::write(dest_socket, boost::asio::buffer(buffer, bytes_read),
-                         ec);
-      if (ec) {
-        throw boost::system::system_error(ec);
-      }
+  while (true) {
+    size_t bytes_read, bytes_written;
+    bytes_read = co_await src_socket.async_receive(
+        boost::asio::buffer(buffer, sizeof(buffer)),
+        boost::asio::use_awaitable);
+    std::cerr << "Read data " << bytes_read << " bytes for " << tag
+              << std::endl;
+    if (bytes_read == 0) {
+      break;  // 连接关闭
     }
-  } catch (const std::exception& e) {
-    std::cerr << "Exception in copy_data: " << e.what() << "\n";
+
+    bytes_written = co_await dest_socket.async_send(
+        boost::asio::buffer(buffer, bytes_read), boost::asio::use_awaitable);
+    std::cerr << "Written data " << bytes_written << " bytes for " << tag
+              << std::endl;
   }
 }
 
 // 处理客户端连接
-void handle_client(tcp::socket client_socket,
-                   const std::string& forward_address) {
+boost::asio::awaitable<void> handle_client(boost::asio::io_context& io_context,
+                                           tcp::socket client_socket,
+                                           const std::string& forward_address) {
   try {
-    boost::asio::io_context io_context;  // 创建一个新的 io_context 实例
     tcp::socket server_socket(
         io_context);  // 使用 io_context 实例创建 server_socket
 
@@ -45,25 +41,40 @@ void handle_client(tcp::socket client_socket,
     auto endpoints = resolver.resolve(forward_address, "5555");
 
     // 连接到服务器
-    boost::asio::connect(server_socket, endpoints);
+    std::cout << "Connecting to server...\n";
+    co_await boost::asio::async_connect(server_socket, endpoints,
+                                        boost::asio::use_awaitable);
+    std::cout << "Connected to server.\n";
 
-    // 异步复制数据
-    std::future<void> to_server =
-        std::async(std::launch::async, copy_data, std::ref(client_socket),
-                   std::ref(server_socket));
-    std::future<void> to_client =
-        std::async(std::launch::async, copy_data, std::ref(server_socket),
-                   std::ref(client_socket));
-
-    // 等待两个异步任务完成
-    to_server.get();
-    to_client.get();
-
+    // 启动协程任务
+    auto c0 = copy_data(client_socket, server_socket, "client to server");
+    auto c1 = copy_data(server_socket, client_socket, "server to client");
+    boost::asio::co_spawn(io_context, std::move(c0), boost::asio::detached);
+    co_await std::move(c1);
   } catch (const std::exception& e) {
     std::cerr << "Exception in handle_client: " << e.what() << "\n";
   }
 
   client_socket.close();
+}
+
+// 主协程
+boost::asio::awaitable<void> main_coroutine(boost::asio::io_context& io_context,
+                                            tcp::acceptor& acceptor) {
+  while (true) {
+    tcp::socket socket(io_context);
+
+    // 异步接受连接
+    co_await acceptor.async_accept(socket, boost::asio::use_awaitable);
+
+    std::cout << "Accepted connection from " << socket.remote_endpoint()
+              << "\n";
+
+    // 启动处理客户端连接的协程
+    boost::asio::co_spawn(
+        io_context, handle_client(io_context, std::move(socket), "127.0.0.1"),
+        boost::asio::detached);
+  }
 }
 
 int main() {
@@ -74,17 +85,12 @@ int main() {
     tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 5556));
     std::cout << "Listening on port 5556, forwarding to 127.0.0.1:5555\n";
 
-    while (true) {
-      // 接受新的连接
-      tcp::socket socket(io_context);
-      acceptor.accept(socket);
+    // 启动主协程
+    boost::asio::co_spawn(io_context, main_coroutine(io_context, acceptor),
+                          boost::asio::detached);
 
-      std::cout << "Accepted connection from " << socket.remote_endpoint()
-                << "\n";
-
-      // 在新线程中处理连接
-      std::thread(handle_client, std::move(socket), "127.0.0.1").detach();
-    }
+    // 运行 io_context
+    io_context.run();
 
   } catch (const std::exception& e) {
     std::cerr << "Exception: " << e.what() << "\n";
