@@ -15,16 +15,20 @@ boost::asio::awaitable<void> copy_data(tcp::socket& src_socket,
     bytes_read = co_await src_socket.async_receive(
         boost::asio::buffer(buffer, sizeof(buffer)),
         boost::asio::use_awaitable);
+#if defined(ENABLE_VERBOSE_LOGGING)
     std::cerr << "Read data " << bytes_read << " bytes for " << tag
               << std::endl;
+#endif
     if (bytes_read == 0) {
       break;  // 连接关闭
     }
 
     bytes_written = co_await dest_socket.async_send(
         boost::asio::buffer(buffer, bytes_read), boost::asio::use_awaitable);
+#if defined(ENABLE_VERBOSE_LOGGING)
     std::cerr << "Written data " << bytes_written << " bytes for " << tag
               << std::endl;
+#endif
   }
 }
 
@@ -41,10 +45,14 @@ boost::asio::awaitable<void> handle_client(boost::asio::io_context& io_context,
     auto endpoints = resolver.resolve(forward_address, "5555");
 
     // 连接到服务器
+#if defined(ENABLE_VERBOSE_LOGGING)
     std::cout << "Connecting to server...\n";
+#endif
     co_await boost::asio::async_connect(server_socket, endpoints,
                                         boost::asio::use_awaitable);
+#if defined(ENABLE_VERBOSE_LOGGING)
     std::cout << "Connected to server.\n";
+#endif
 
     // 启动协程任务
     auto c0 = copy_data(client_socket, server_socket, "client to server");
