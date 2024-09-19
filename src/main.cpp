@@ -8,12 +8,12 @@ using boost::asio::ip::tcp;
 // 复制数据
 void copy_data(tcp::socket& src_socket, tcp::socket& dest_socket) {
   try {
-    char buffer[1024];
+    std::vector<uint8_t> buffer(1024 * 1024);
     boost::system::error_code ec;
 
     while (true) {
       // 从源套接字读取数据
-      size_t bytes_read = src_socket.read_some(boost::asio::buffer(buffer), ec);
+      size_t bytes_read = src_socket.receive(boost::asio::buffer(buffer));
       if (ec == boost::asio::error::eof) {
         break;  // 连接关闭
       } else if (ec) {
@@ -21,11 +21,7 @@ void copy_data(tcp::socket& src_socket, tcp::socket& dest_socket) {
       }
 
       // 将数据写入目标套接字
-      boost::asio::write(dest_socket, boost::asio::buffer(buffer, bytes_read),
-                         ec);
-      if (ec) {
-        throw boost::system::system_error(ec);
-      }
+      dest_socket.send(boost::asio::buffer(buffer, bytes_read));
     }
   } catch (const std::exception& e) {
     std::cerr << "Exception in copy_data: " << e.what() << "\n";
