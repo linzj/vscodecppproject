@@ -1,93 +1,92 @@
-#include <boost/asio.hpp>
-#include <boost/asio/experimental/as_tuple.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/experimental/co_spawn.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
-#include <boost/asio/write.hpp>
+#include <coroutine>
 #include <iostream>
+#include <memory>
+#include <vector>
 
-namespace asio = boost::asio;
-using asio::ip::tcp;
-using namespace asio::experimental::awaitable_operators;
+// Generator coroutine type
+template <typename T>
+struct Generator {
+  struct promise_type;
+  using handle_type = std::coroutine_handle<promise_type>;
 
-constexpr uint16_t listen_port = 5556;
-constexpr char forward_host[] = "127.0.0.1";
-constexpr uint16_t forward_port = 5555;
-constexpr size_t kBufferSize = 1024 * 1024;
-// #define ENABLE_VERBOSE_LOG 1
-
-asio::awaitable<void> forward_data(tcp::socket& client,
-                                   tcp::socket& server,
-                                   const char* tag) {
-  try {
-    std::vector<char> data(kBufferSize);
-    while (true) {
-      size_t n = co_await client.async_receive(asio::buffer(data),
-                                               asio::use_awaitable);
-#if defined(ENABLE_VERBOSE_LOG)
-      std::cerr << "received " << n << " bytes data for " << tag << std::endl;
-#endif
-      size_t sent = co_await boost::asio::async_write(
-          server, asio::buffer(data, n), asio::use_awaitable);
-#if defined(ENABLE_VERBOSE_LOG)
-      std::cerr << "sent " << sent << " bytes data for " << tag << std::endl;
-#endif
+  struct promise_type {
+    T value;
+    std::suspend_always initial_suspend() { return {}; }
+    std::suspend_always final_suspend() noexcept { return {}; }
+    std::suspend_always yield_value(T v) {
+      value = v;
+      return {};
     }
-  } catch (std::exception& e) {
-    std::cerr << "Forwarding failed: " << e.what() << '\n';
+    Generator get_return_object() {
+      return Generator(handle_type::from_promise(*this));
+    }
+    void unhandled_exception() { std::exit(1); }
+    void return_void() {}
+  };
+
+  handle_type coro;
+
+  Generator(handle_type h) : coro(h) {}
+  ~Generator() {
+    if (coro)
+      coro.destroy();
+  }
+
+  T getValue() { return coro.promise().value; }
+  bool next() {
+    coro.resume();
+    return !coro.done();
+  }
+};
+
+Generator<int> generate_numbers(int max) {
+  for (int i = 0; i <= max; ++i) {
+    co_yield i;
   }
 }
 
-asio::awaitable<void> handle_session(tcp::socket client) {
-  try {
-    tcp::resolver resolver(client.get_executor());
-    auto endpoints = co_await resolver.async_resolve(
-        forward_host, std::to_string(forward_port), asio::use_awaitable);
-    tcp::socket server(client.get_executor());
-    co_await server.async_connect(*endpoints.begin(), asio::use_awaitable);
+struct ReturnObject {
+  struct promise_type {
+    ReturnObject get_return_object() { return {}; }
+    std::suspend_never initial_suspend() { return {}; }
+    std::suspend_never final_suspend() noexcept { return {}; }
+    void unhandled_exception() {}
+  };
+};
 
-    // Set TCP_NODELAY on the client socket
-    server.set_option(tcp::no_delay(true));
-    // Optionally increase buffer sizes
-    server.set_option(asio::socket_base::send_buffer_size(kBufferSize));
-    server.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
-    auto client_to_server = forward_data(client, server, "client to server");
-    auto server_to_client = forward_data(server, client, "server to client");
+struct Awaiter {
+  std::coroutine_handle<>* hp_;
+  constexpr bool await_ready() const noexcept { return false; }
+  void await_suspend(std::coroutine_handle<> h) { *hp_ = h; }
+  constexpr void await_resume() const noexcept {}
+};
 
-    co_await (std::move(client_to_server) && std::move(server_to_client));
-  } catch (std::exception& e) {
-    std::cerr << "Session error: " << e.what() << '\n';
+ReturnObject counter(std::coroutine_handle<>* continuation_out) {
+  Awaiter a{continuation_out};
+  for (unsigned i = 0;; ++i) {
+    co_await a;
+    std::cout << "counter: " << i << std::endl;
   }
 }
 
-asio::awaitable<void> listener(asio::io_context& io_context) {
-  auto executor = co_await asio::this_coro::executor;
-  tcp::acceptor acceptor(executor, tcp::endpoint(tcp::v6(), listen_port));
-  acceptor.set_option(tcp::acceptor::reuse_address(true));
-
-  while (true) {
-    tcp::socket socket = co_await acceptor.async_accept(asio::use_awaitable);
-
-    // Set TCP_NODELAY on the client socket
-    socket.set_option(tcp::no_delay(true));
-    // Optionally increase buffer sizes
-    socket.set_option(asio::socket_base::send_buffer_size(kBufferSize));
-    socket.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
-    asio::co_spawn(executor, handle_session(std::move(socket)), asio::detached);
+void main1() {
+  std::coroutine_handle<> h;
+  counter(&h);
+  for (int i = 0; i < 3; ++i) {
+    std::cout << "In main1 function\n";
+    h();
   }
+  h.destroy();
 }
 
 int main() {
-  try {
-    asio::io_context io_context;
-    asio::signal_set signals(io_context, SIGINT, SIGTERM);
-    signals.async_wait([&](auto, auto) { io_context.stop(); });
-
-    asio::co_spawn(io_context, listener(io_context), asio::detached);
-    io_context.run();
-  } catch (std::exception& e) {
-    std::cerr << "Main error: " << e.what() << '\n';
+#if 0
+  auto numbers = generate_numbers(10);
+  while (numbers.next()) {
+    std::cout << "Generated number: " << numbers.getValue() << std::endl;
   }
+#else
+  main1();
+#endif
   return 0;
 }

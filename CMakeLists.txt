@@ -10,13 +10,8 @@ else()
     set(CMAKE_IS_CLANG FALSE CACHE BOOL "Indicates whether the compiler is Clang or AppleClang")
 endif()
 
-find_package(Boost REQUIRED COMPONENTS system)
 add_executable(${PROJECT_NAME} src/main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE Boost::system)
 
 if (WIN32)
   add_compile_definitions(${PROJECT_NAME} "UNICODE")
-  if (CMAKE_IS_CLANG)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE BOOST_ASIO_HAS_CO_AWAIT)
-  endif()
 endif()
