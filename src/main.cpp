@@ -14,13 +14,14 @@ using namespace asio::experimental::awaitable_operators;
 constexpr uint16_t listen_port = 5556;
 constexpr char forward_host[] = "127.0.0.1";
 constexpr uint16_t forward_port = 5555;
+constexpr size_t kBufferSize = 1024 * 1024;
 // #define ENABLE_VERBOSE_LOG 1
 
 asio::awaitable<void> forward_data(tcp::socket& client,
                                    tcp::socket& server,
                                    const char* tag) {
   try {
-    std::vector<char> data(1024 * 1024);
+    std::vector<char> data(kBufferSize);
     while (true) {
       size_t n = co_await client.async_receive(asio::buffer(data),
                                                asio::use_awaitable);
@@ -46,6 +47,11 @@ asio::awaitable<void> handle_session(tcp::socket client) {
     tcp::socket server(client.get_executor());
     co_await server.async_connect(*endpoints.begin(), asio::use_awaitable);
 
+    // Set TCP_NODELAY on the client socket
+    server.set_option(tcp::no_delay(true));
+    // Optionally increase buffer sizes
+    server.set_option(asio::socket_base::send_buffer_size(kBufferSize));
+    server.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
     auto client_to_server = forward_data(client, server, "client to server");
     auto server_to_client = forward_data(server, client, "server to client");
 
@@ -62,6 +68,12 @@ asio::awaitable<void> listener(asio::io_context& io_context) {
 
   while (true) {
     tcp::socket socket = co_await acceptor.async_accept(asio::use_awaitable);
+
+    // Set TCP_NODELAY on the client socket
+    socket.set_option(tcp::no_delay(true));
+    // Optionally increase buffer sizes
+    socket.set_option(asio::socket_base::send_buffer_size(kBufferSize));
+    socket.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
     asio::co_spawn(executor, handle_session(std::move(socket)), asio::detached);
   }
 }
