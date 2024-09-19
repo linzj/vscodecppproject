@@ -14,14 +14,24 @@ using namespace asio::experimental::awaitable_operators;
 constexpr uint16_t listen_port = 5556;
 constexpr char forward_host[] = "127.0.0.1";
 constexpr uint16_t forward_port = 5555;
+// #define ENABLE_VERBOSE_LOG 1
 
-asio::awaitable<void> forward_data(tcp::socket& client, tcp::socket& server) {
+asio::awaitable<void> forward_data(tcp::socket& client,
+                                   tcp::socket& server,
+                                   const char* tag) {
   try {
     std::vector<char> data(1024 * 1024);
     while (true) {
       size_t n = co_await client.async_receive(asio::buffer(data),
                                                asio::use_awaitable);
-      co_await server.async_send(asio::buffer(data, n), asio::use_awaitable);
+#if defined(ENABLE_VERBOSE_LOG)
+      std::cerr << "received " << n << " bytes data for " << tag << std::endl;
+#endif
+      size_t sent = co_await boost::asio::async_write(
+          server, asio::buffer(data, n), asio::use_awaitable);
+#if defined(ENABLE_VERBOSE_LOG)
+      std::cerr << "sent " << sent << " bytes data for " << tag << std::endl;
+#endif
     }
   } catch (std::exception& e) {
     std::cerr << "Forwarding failed: " << e.what() << '\n';
@@ -36,8 +46,8 @@ asio::awaitable<void> handle_session(tcp::socket client) {
     tcp::socket server(client.get_executor());
     co_await server.async_connect(*endpoints.begin(), asio::use_awaitable);
 
-    auto client_to_server = forward_data(client, server);
-    auto server_to_client = forward_data(server, client);
+    auto client_to_server = forward_data(client, server, "client to server");
+    auto server_to_client = forward_data(server, client, "server to client");
 
     co_await (std::move(client_to_server) && std::move(server_to_client));
   } catch (std::exception& e) {
