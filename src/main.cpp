@@ -1,93 +1,45 @@
 #include <boost/asio.hpp>
-#include <boost/asio/experimental/as_tuple.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/experimental/co_spawn.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
-#include <boost/asio/write.hpp>
 #include <iostream>
+#include <random>
 
-namespace asio = boost::asio;
-using asio::ip::tcp;
-using namespace asio::experimental::awaitable_operators;
+using boost::asio::awaitable;
+using boost::asio::co_spawn;
+using boost::asio::steady_timer;
+using namespace std::chrono_literals;
 
-constexpr uint16_t listen_port = 5556;
-constexpr char forward_host[] = "127.0.0.1";
-constexpr uint16_t forward_port = 5555;
-constexpr size_t kBufferSize = 1024 * 1024;
-// #define ENABLE_VERBOSE_LOG 1
+// Function to delay and then generate a random number
+awaitable<int> delayed_random_number(boost::asio::io_context& io) {
+  steady_timer timer(io, 5s);
+  co_await timer.async_wait(boost::asio::use_awaitable);
 
-asio::awaitable<void> forward_data(tcp::socket& client,
-                                   tcp::socket& server,
-                                   const char* tag) {
-  try {
-    std::vector<char> data(kBufferSize);
-    while (true) {
-      size_t n = co_await client.async_receive(asio::buffer(data),
-                                               asio::use_awaitable);
-#if defined(ENABLE_VERBOSE_LOG)
-      std::cerr << "received " << n << " bytes data for " << tag << std::endl;
-#endif
-      size_t sent = co_await boost::asio::async_write(
-          server, asio::buffer(data, n), asio::use_awaitable);
-#if defined(ENABLE_VERBOSE_LOG)
-      std::cerr << "sent " << sent << " bytes data for " << tag << std::endl;
-#endif
-    }
-  } catch (std::exception& e) {
-    std::cerr << "Forwarding failed: " << e.what() << '\n';
-  }
-}
+  // Generate random number after delay
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> distrib(1, 100);
+  int result = distrib(gen);
 
-asio::awaitable<void> handle_session(tcp::socket client) {
-  try {
-    tcp::resolver resolver(client.get_executor());
-    auto endpoints = co_await resolver.async_resolve(
-        forward_host, std::to_string(forward_port), asio::use_awaitable);
-    tcp::socket server(client.get_executor());
-    co_await server.async_connect(*endpoints.begin(), asio::use_awaitable);
-
-    // Set TCP_NODELAY on the client socket
-    server.set_option(tcp::no_delay(true));
-    // Optionally increase buffer sizes
-    server.set_option(asio::socket_base::send_buffer_size(kBufferSize));
-    server.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
-    auto client_to_server = forward_data(client, server, "client to server");
-    auto server_to_client = forward_data(server, client, "server to client");
-
-    co_await (std::move(client_to_server) && std::move(server_to_client));
-  } catch (std::exception& e) {
-    std::cerr << "Session error: " << e.what() << '\n';
-  }
-}
-
-asio::awaitable<void> listener(asio::io_context& io_context) {
-  auto executor = co_await asio::this_coro::executor;
-  tcp::acceptor acceptor(executor, tcp::endpoint(tcp::v6(), listen_port));
-  acceptor.set_option(tcp::acceptor::reuse_address(true));
-
-  while (true) {
-    tcp::socket socket = co_await acceptor.async_accept(asio::use_awaitable);
-
-    // Set TCP_NODELAY on the client socket
-    socket.set_option(tcp::no_delay(true));
-    // Optionally increase buffer sizes
-    socket.set_option(asio::socket_base::send_buffer_size(kBufferSize));
-    socket.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
-    asio::co_spawn(executor, handle_session(std::move(socket)), asio::detached);
-  }
+  co_return result;
 }
 
 int main() {
-  try {
-    asio::io_context io_context;
-    asio::signal_set signals(io_context, SIGINT, SIGTERM);
-    signals.async_wait([&](auto, auto) { io_context.stop(); });
+  boost::asio::io_context io_context;
 
-    asio::co_spawn(io_context, listener(io_context), asio::detached);
-    io_context.run();
-  } catch (std::exception& e) {
-    std::cerr << "Main error: " << e.what() << '\n';
-  }
+  // Launch the asynchronous operation
+  co_spawn(io_context, delayed_random_number(std::ref(io_context)),
+           [](std::exception_ptr e, int result) {
+             if (e) {
+               try {
+                 std::rethrow_exception(e);
+               } catch (const std::exception& ex) {
+                 std::cerr << "Caught exception: " << ex.what() << '\n';
+               }
+             } else {
+               std::cout << "Random number: " << result << '\n';
+             }
+           });
+
+  // Run the io_context to perform the asynchronous operations
+  io_context.run();
+
   return 0;
 }
