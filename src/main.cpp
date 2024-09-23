@@ -74,8 +74,25 @@ awaitable<int> delayed_random_number_async(boost::asio::io_context& io) {
   co_return co_await async_num.async_num(boost::asio::use_awaitable);
 }
 
+awaitable<void> InitiateCoSpawn(boost::asio::io_context& io) {
+  int result;
+  try {
+    result = co_await co_spawn(io, delayed_random_number(io),
+                               boost::asio::use_awaitable);
+  } catch (std::exception& ex) {
+    std::cerr << "Caught exception: " << ex.what() << '\n';
+  }
+
+  std::cout << "Random number async co spawn: " << result << '\n';
+}
+
 int main() {
   boost::asio::io_context io_context;
+  boost::asio::io_context io_context_async;
+  auto work_guard = boost::asio::make_work_guard(io_context_async);
+
+  auto async_future = std::async(
+      std::launch::async, [&io_context_async]() { io_context_async.run(); });
 
   // Launch the asynchronous operation
   co_spawn(io_context, delayed_random_number(std::ref(io_context)),
@@ -103,9 +120,13 @@ int main() {
                std::cout << "Random number async: " << result << '\n';
              }
            });
+  co_spawn(io_context, InitiateCoSpawn(io_context_async),
+           boost::asio::detached);
 
   // Run the io_context to perform the asynchronous operations
   io_context.run();
+  io_context_async.stop();
+  async_future.get();
 
   return 0;
 }
