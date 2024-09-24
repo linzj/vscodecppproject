@@ -17,6 +17,41 @@ constexpr uint16_t forward_port = 5555;
 constexpr size_t kBufferSize = 1024 * 1024;
 // #define ENABLE_VERBOSE_LOG 1
 
+static asio::awaitable<void> forward_data_async(tcp::socket& client,
+                                                tcp::socket& server,
+                                                const char* tag) {
+  asio::io_context forward_data_context;
+  auto forward_context_guard =
+      boost::asio::make_work_guard(forward_data_context);
+  auto future = std::async(std::launch::async, [&forward_data_context]() {
+    forward_data_context.run();
+  });
+  (void)future;
+  try {
+    auto scoped_guard = std::move(forward_context_guard);
+    co_await asio::co_spawn(
+        forward_data_context,
+        [&client, &server, tag]() mutable -> asio::awaitable<void> {
+          std::vector<char> data(kBufferSize);
+          while (true) {
+            size_t n = client.receive(asio::buffer(data));
+#if defined(ENABLE_VERBOSE_LOG)
+            std::cerr << "received " << n << " bytes data for " << tag
+                      << std::endl;
+#endif
+            size_t sent = server.send(asio::buffer(data, n));
+#if defined(ENABLE_VERBOSE_LOG)
+            std::cerr << "sent " << sent << " bytes data for " << tag
+                      << std::endl;
+#endif
+          }
+        },
+        asio::use_awaitable);
+  } catch (std::exception& e) {
+    std::cerr << "Forwarding failed: " << e.what() << '\n';
+  }
+}
+
 asio::awaitable<void> forward_data(tcp::socket& client,
                                    tcp::socket& server,
                                    const char* tag) {
@@ -28,8 +63,8 @@ asio::awaitable<void> forward_data(tcp::socket& client,
 #if defined(ENABLE_VERBOSE_LOG)
       std::cerr << "received " << n << " bytes data for " << tag << std::endl;
 #endif
-      size_t sent = co_await boost::asio::async_write(
-          server, asio::buffer(data, n), asio::use_awaitable);
+      size_t sent = co_await server.async_send(asio::buffer(data, n),
+                                               asio::use_awaitable);
 #if defined(ENABLE_VERBOSE_LOG)
       std::cerr << "sent " << sent << " bytes data for " << tag << std::endl;
 #endif
@@ -52,8 +87,10 @@ asio::awaitable<void> handle_session(tcp::socket client) {
     // Optionally increase buffer sizes
     server.set_option(asio::socket_base::send_buffer_size(kBufferSize));
     server.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
-    auto client_to_server = forward_data(client, server, "client to server");
-    auto server_to_client = forward_data(server, client, "server to client");
+    auto client_to_server =
+        forward_data_async(client, server, "client to server");
+    auto server_to_client =
+        forward_data_async(server, client, "server to client");
 
     co_await (std::move(client_to_server) && std::move(server_to_client));
   } catch (std::exception& e) {
