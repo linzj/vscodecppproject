@@ -91,11 +91,6 @@ asio::awaitable<void> handle_session(tcp::socket client) {
     tcp::socket server(client.get_executor());
     co_await server.async_connect(*endpoints.begin(), asio::use_awaitable);
 
-    // Set TCP_NODELAY on the client socket
-    server.set_option(tcp::no_delay(true));
-    // Optionally increase buffer sizes
-    server.set_option(asio::socket_base::send_buffer_size(kBufferSize));
-    server.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
     auto client_to_server = forward_data(client, server, "client to server");
     auto server_to_client = forward_data(server, client, "server to client");
 
