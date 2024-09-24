@@ -33,22 +33,30 @@ static asio::awaitable<void> forward_data_async(tcp::socket& client,
         forward_data_context,
         [&client, &server, tag]() mutable -> asio::awaitable<void> {
           std::vector<char> data(kBufferSize);
+          size_t total_sent = 0;
+#if !defined(ENABLE_VERBOSE_LOG)
+          (void)total_sent;
+#endif
           while (true) {
             size_t n = client.receive(asio::buffer(data));
 #if defined(ENABLE_VERBOSE_LOG)
             std::cerr << "received " << n << " bytes data for " << tag
                       << std::endl;
 #endif
-            size_t sent = server.send(asio::buffer(data, n));
+            size_t sent = asio::write(server, asio::buffer(data, n));
 #if defined(ENABLE_VERBOSE_LOG)
-            std::cerr << "sent " << sent << " bytes data for " << tag
-                      << std::endl;
+            total_sent += sent;
+            std::cerr << "sent " << sent << "; total_sent: " << total_sent
+                      << " bytes data for " << tag << std::endl;
 #endif
           }
         },
         asio::use_awaitable);
   } catch (std::exception& e) {
-    std::cerr << "Forwarding failed: " << e.what() << '\n';
+    std::cerr << "Forwarding failed: " << e.what() << " tag: " << tag << '\n';
+    client.close();
+    server.close();
+    throw e;
   }
 }
 
@@ -63,14 +71,15 @@ asio::awaitable<void> forward_data(tcp::socket& client,
 #if defined(ENABLE_VERBOSE_LOG)
       std::cerr << "received " << n << " bytes data for " << tag << std::endl;
 #endif
-      size_t sent = co_await server.async_send(asio::buffer(data, n),
+      size_t sent = co_await asio::async_write(server, asio::buffer(data, n),
                                                asio::use_awaitable);
 #if defined(ENABLE_VERBOSE_LOG)
       std::cerr << "sent " << sent << " bytes data for " << tag << std::endl;
 #endif
     }
   } catch (std::exception& e) {
-    std::cerr << "Forwarding failed: " << e.what() << '\n';
+    std::cerr << "Forwarding failed: " << e.what() << " tag: " << tag << '\n';
+    throw e;
   }
 }
 
@@ -87,10 +96,8 @@ asio::awaitable<void> handle_session(tcp::socket client) {
     // Optionally increase buffer sizes
     server.set_option(asio::socket_base::send_buffer_size(kBufferSize));
     server.set_option(asio::socket_base::receive_buffer_size(kBufferSize));
-    auto client_to_server =
-        forward_data_async(client, server, "client to server");
-    auto server_to_client =
-        forward_data_async(server, client, "server to client");
+    auto client_to_server = forward_data(client, server, "client to server");
+    auto server_to_client = forward_data(server, client, "server to client");
 
     co_await (std::move(client_to_server) && std::move(server_to_client));
   } catch (std::exception& e) {
